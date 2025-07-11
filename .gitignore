@@ -1,0 +1,4 @@
+.venv/
+documents/
+rag_system.log
+vector_db/processed_files.pkl
