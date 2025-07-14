@@ -5,3 +5,5 @@ faiss-cpu
 pypdf
 PyMuPDF
 watchdog
+pytesseract
+pdf2image
