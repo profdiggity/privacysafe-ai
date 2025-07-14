@@ -1,19 +1,14 @@
-#!/usr/bin/env python3
-"""
-Robust RAG System with Ollama Gemma 3B
-Automatically processes PDFs and provides precise answers
-"""
-
 import os
 import time
 import hashlib
 import pickle
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Generator
 from dataclasses import dataclass
 from datetime import datetime
 import re
+import fitz  # PyMuPDF - more robust PDF processing
 
 # Core dependencies
 from langchain_ollama import OllamaLLM, OllamaEmbeddings
@@ -41,8 +36,8 @@ class RAGConfig:
     temperature: float = 0.0
     top_p: float = 0.1
 
-class DocumentProcessor:
-    """Handles PDF processing and text extraction"""
+class EnhancedDocumentProcessor:
+    """Enhanced PDF processing with multiple extraction methods"""
 
     def __init__(self, config: RAGConfig):
         self.config = config
@@ -54,10 +49,26 @@ class DocumentProcessor:
         )
 
     def process_pdf(self, pdf_path: str) -> List[Document]:
-        """Process a single PDF file"""
+        """Process a single PDF file with multiple extraction methods"""
         try:
-            loader = PyPDFLoader(pdf_path)
-            documents = loader.load()
+            print(f"Processing {os.path.basename(pdf_path)}...")
+
+            # Method 1: Try PyMuPDF first (most robust)
+            documents = self._extract_with_pymupdf(pdf_path)
+
+            # Method 2: Fallback to PyPDF if PyMuPDF fails
+            if not documents:
+                print("PyMuPDF failed, trying PyPDF...")
+                documents = self._extract_with_pypdf(pdf_path)
+
+            # Method 3: Last resort - try to extract images with OCR
+            if not documents:
+                print("PyPDF failed, trying OCR extraction...")
+                documents = self._extract_with_ocr(pdf_path)
+
+            if not documents:
+                print(f"Failed to extract any text from {pdf_path}")
+                return []
 
             # Add metadata
             for doc in documents:
@@ -68,13 +79,84 @@ class DocumentProcessor:
                 })
 
             # Split documents
-            split_docs = self.text_splitter.split_documents(documents)
-            logging.info(f"Processed {pdf_path}: {len(split_docs)} chunks")
+            split_docs = self._split_documents(documents)
+            print(f"Extracted {len(split_docs)} chunks from {len(documents)} pages")
+
             return split_docs
 
         except Exception as e:
+            print(f"Error processing {pdf_path}: {str(e)}")
             logging.error(f"Error processing {pdf_path}: {str(e)}")
             return []
+
+    def _extract_with_pymupdf(self, pdf_path: str) -> List[Document]:
+        """Extract text using PyMuPDF (most robust)"""
+        try:
+            doc = fitz.open(pdf_path)
+            documents = []
+
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                text = page.get_text()
+
+                if text.strip():  # Only add pages with actual text
+                    documents.append(Document(
+                        page_content=text,
+                        metadata={'page': page_num + 1, 'extraction_method': 'pymupdf'}
+                    ))
+
+            doc.close()
+            return documents
+
+        except Exception as e:
+            logging.error(f"PyMuPDF extraction failed: {str(e)}")
+            return []
+
+    def _extract_with_pypdf(self, pdf_path: str) -> List[Document]:
+        """Fallback extraction using PyPDF"""
+        try:
+            loader = PyPDFLoader(pdf_path)
+            documents = loader.load()
+
+            # Filter out empty pages
+            documents = [doc for doc in documents if doc.page_content.strip()]
+
+            # Add extraction method to metadata
+            for doc in documents:
+                doc.metadata['extraction_method'] = 'pypdf'
+
+            return documents
+
+        except Exception as e:
+            logging.error(f"PyPDF extraction failed: {str(e)}")
+            return []
+
+    def _extract_with_ocr(self, pdf_path: str) -> List[Document]:
+        """Last resort: OCR extraction (requires additional setup)"""
+        try:
+            # This would require pytesseract and pdf2image
+            # For now, return empty list
+            print("OCR extraction not implemented (requires pytesseract)")
+            return []
+
+        except Exception as e:
+            logging.error(f"OCR extraction failed: {str(e)}")
+            return []
+
+    def _split_documents(self, documents: List[Document]) -> List[Document]:
+        """Split documents into chunks"""
+        if not documents:
+            return []
+
+        # Filter out very short documents
+        filtered_docs = [doc for doc in documents if len(doc.page_content.strip()) > 50]
+
+        if not filtered_docs:
+            print("All pages too short after filtering")
+            return []
+
+        split_docs = self.text_splitter.split_documents(filtered_docs)
+        return split_docs
 
     def _get_file_hash(self, filepath: str) -> str:
         """Generate hash for file to detect changes"""
@@ -118,8 +200,10 @@ class VectorStoreManager:
                     self.embeddings,
                     allow_dangerous_deserialization=True
                 )
+                print("Loaded existing vector store")
                 logging.info("Loaded existing vector store")
             except Exception as e:
+                print(f"Error loading vector store: {str(e)}")
                 logging.error(f"Error loading vector store: {str(e)}")
                 self.vector_store = None
 
@@ -130,6 +214,7 @@ class VectorStoreManager:
             vector_store_path = os.path.join(self.config.vector_db_path, "faiss_index")
             self.vector_store.save_local(vector_store_path)
             self._save_processed_files()
+            print("Vector store saved")
             logging.info("Saved vector store")
 
     def add_documents(self, documents: List[Document], file_path: str, file_hash: str):
@@ -138,9 +223,13 @@ class VectorStoreManager:
             return
 
         try:
+            print(f"Adding {len(documents)} chunks to vector store...")
+
             if self.vector_store is None:
+                print("Creating new vector store...")
                 self.vector_store = FAISS.from_documents(documents, self.embeddings)
             else:
+                print("Adding to existing vector store...")
                 self.vector_store.add_documents(documents)
 
             # Record the processed file
@@ -151,9 +240,11 @@ class VectorStoreManager:
             }
 
             self.save_vector_store()
+            print(f"Successfully added {len(documents)} chunks from {os.path.basename(file_path)}")
             logging.info(f"Added {len(documents)} documents from {file_path}")
 
         except Exception as e:
+            print(f"Error adding documents: {str(e)}")
             logging.error(f"Error adding documents: {str(e)}")
 
     def get_retriever(self):
@@ -224,30 +315,35 @@ class PDFFileHandler(FileSystemEventHandler):
 
     def on_created(self, event):
         if not event.is_directory and event.src_path.endswith('.pdf'):
+            print(f"New PDF detected: {os.path.basename(event.src_path)}")
             logging.info(f"New PDF detected: {event.src_path}")
             time.sleep(1)  # Wait for file to be completely written
             self.rag_system.process_single_file(event.src_path)
 
     def on_modified(self, event):
         if not event.is_directory and event.src_path.endswith('.pdf'):
+            print(f"PDF modified: {os.path.basename(event.src_path)}")
             logging.info(f"PDF modified: {event.src_path}")
             time.sleep(1)  # Wait for file to be completely written
             self.rag_system.process_single_file(event.src_path)
 
 class RobustRAGSystem:
-    """Main RAG system class"""
+    """Main RAG system class with streaming support"""
 
     def __init__(self, config: RAGConfig = None):
         self.config = config or RAGConfig()
         self.setup_logging()
         self.setup_directories()
 
+        print("Initializing Robust RAG System...")
+
         # Initialize components
-        self.doc_processor = DocumentProcessor(self.config)
+        self.doc_processor = EnhancedDocumentProcessor(self.config)
         self.vector_manager = VectorStoreManager(self.config)
         self.response_filter = ResponseFilter()
 
         # Initialize model
+        print("Initializing Ollama model...")
         self.model = OllamaLLM(
             model=self.config.model_name,
             temperature=self.config.temperature,
@@ -266,6 +362,8 @@ class RobustRAGSystem:
 
         # Setup query chain
         self.setup_query_chain()
+
+        print("RAG System initialized successfully!")
 
     def setup_logging(self):
         """Setup logging configuration"""
@@ -327,9 +425,11 @@ Answer:"""
         pdf_files = list(Path(self.config.pdf_folder).glob("*.pdf"))
 
         if not pdf_files:
+            print("No PDF files found in the documents folder")
             logging.info("No PDF files found in the documents folder")
             return
 
+        print(f"Found {len(pdf_files)} PDF files to process")
         logging.info(f"Found {len(pdf_files)} PDF files to process")
 
         for pdf_file in pdf_files:
@@ -341,21 +441,27 @@ Answer:"""
             file_hash = self.doc_processor._get_file_hash(file_path)
 
             if not self.vector_manager.needs_processing(file_path, file_hash):
+                print(f"Skipping {os.path.basename(file_path)} - already processed")
                 logging.info(f"Skipping {file_path} - already processed")
                 return
 
+            print(f"Processing {os.path.basename(file_path)}...")
             logging.info(f"Processing {file_path}")
+
             documents = self.doc_processor.process_pdf(file_path)
 
             if documents:
                 self.vector_manager.add_documents(documents, file_path, file_hash)
                 # Refresh query chain with updated vector store
                 self.setup_query_chain()
+                print(f"Successfully processed {os.path.basename(file_path)}")
                 logging.info(f"Successfully processed {file_path}")
             else:
+                print(f"No documents extracted from {os.path.basename(file_path)}")
                 logging.warning(f"No documents extracted from {file_path}")
 
         except Exception as e:
+            print(f"Error processing {os.path.basename(file_path)}: {str(e)}")
             logging.error(f"Error processing {file_path}: {str(e)}")
 
     def start_monitoring(self):
@@ -367,6 +473,7 @@ Answer:"""
         self.observer = Observer()
         self.observer.schedule(event_handler, self.config.pdf_folder, recursive=False)
         self.observer.start()
+        print(f"👁️  Started monitoring {self.config.pdf_folder} for new PDFs")
         logging.info(f"Started monitoring {self.config.pdf_folder} for new PDFs")
 
     def stop_monitoring(self):
@@ -375,10 +482,11 @@ Answer:"""
             self.observer.stop()
             self.observer.join()
             self.observer = None
+            print("Stopped monitoring for new PDFs")
             logging.info("Stopped monitoring for new PDFs")
 
     def query(self, question: str) -> str:
-        """Query the RAG system"""
+        """Query the RAG system (non-streaming)"""
         if not self.query_chain:
             return "No documents have been processed yet. Please add PDF files to the documents folder."
 
@@ -389,6 +497,45 @@ Answer:"""
             logging.error(f"Error processing query: {str(e)}")
             return "An error occurred while processing your question."
 
+    def stream_query(self, question: str) -> Generator[str, None, None]:
+        """Query the RAG system with streaming response"""
+        if not self.query_chain:
+            yield "No documents have been processed yet. Please add PDF files to the documents folder."
+            return
+
+        try:
+            # Get context first
+            retriever = self.vector_manager.get_retriever()
+            if not retriever:
+                yield "No documents available for querying."
+                return
+
+            # Retrieve relevant documents
+            docs = retriever.invoke(question)
+            context = self._format_context(docs)
+
+            # Format the prompt
+            prompt_text = self.prompt.format(context=context, question=question)
+
+            # Stream the response
+            response_parts = []
+            for chunk in self.model.stream(prompt_text):
+                response_parts.append(chunk)
+                yield chunk
+
+            # Apply post-processing to the complete response
+            complete_response = "".join(response_parts)
+            filtered_response = self.response_filter.clean_response(complete_response)
+
+            # If the filtered response is different, clear and send the filtered version
+            if filtered_response != complete_response:
+                yield "\r" + " " * len(complete_response) + "\r"  # Clear the line
+                yield filtered_response
+
+        except Exception as e:
+            logging.error(f"Error processing streaming query: {str(e)}")
+            yield "An error occurred while processing your question."
+
     def get_system_info(self) -> Dict[str, Any]:
         """Get system information"""
         return {
@@ -397,12 +544,13 @@ Answer:"""
             "processed_files": len(self.vector_manager.processed_files),
             "model": self.config.model_name,
             "embedding_model": self.config.embedding_model,
-            "monitoring_active": self.observer is not None
+            "monitoring_active": self.observer is not None,
+            "vector_store_ready": self.vector_manager.vector_store is not None
         }
 
 def main():
     """Main function to run the RAG system"""
-    print("🚀 Initializing Robust RAG System...")
+    print("Initializing Robust RAG System...")
 
     # Create custom config if needed
     config = RAGConfig(
@@ -420,17 +568,17 @@ def main():
 
     # Print system info
     info = rag.get_system_info()
-    print("\n📊 System Information:")
+    print("\nSystem Information:")
     for key, value in info.items():
         print(f"  {key}: {value}")
 
-    print(f"\n📁 Drop PDF files into: {config.pdf_folder}")
-    print("💬 Ready to answer questions!\n")
+    print(f"\nDrop PDF files into: {config.pdf_folder}")
+    print("Ready to answer questions!\n")
 
-    # Interactive query loop
+    # Interactive query loop with streaming
     try:
         while True:
-            question = input("\n🤔 Ask a question (or 'quit' to exit): ").strip()
+            question = input("\nAsk a question (or 'quit' to exit): ").strip()
 
             if question.lower() in ['quit', 'exit', 'q']:
                 break
@@ -438,16 +586,20 @@ def main():
             if not question:
                 continue
 
-            print("🔍 Searching...")
-            answer = rag.query(question)
-            print(f"📝 Answer: {answer}")
+            print("Searching...", end=" ")
+
+            # Stream the response
+            for chunk in rag.stream_query(question):
+                print(chunk, end="", flush=True)
+
+            print()  # New line after streaming
 
     except KeyboardInterrupt:
-        print("\n\n👋 Shutting down...")
+        print("\n\nShutting down...")
 
     finally:
         rag.stop_monitoring()
-        print("✅ RAG system stopped.")
+        print("RAG system stopped.")
 
 if __name__ == "__main__":
     main()
