@@ -770,6 +770,9 @@ Good Answer: "Remote work presents a mixed picture with clear benefits and chall
         yield "\r" + " " * len(complete_response) + "\r"  # Clear the line
         yield filtered_response
 
+      # Add a newline when the answer stream ends
+      yield "\n"
+
     except Exception as e:
       logging.error(f"Error processing streaming query: {str(e)}")
       yield "An error occurred while processing your question."
