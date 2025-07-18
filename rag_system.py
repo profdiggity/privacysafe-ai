@@ -35,7 +35,7 @@ class RAGConfig:
   pdf_folder: str = "./documents"
   vector_db_path: str = "./vector_db"
   model_name: str = "gemma3:4b"
-  embedding_model: str = "nomic-embed-text:latest"
+  embedding_model: str = "bge-m3:latest"
   chunk_size: int = 1000
   chunk_overlap: int = 200
   max_retrieval_docs: int = 4
@@ -850,7 +850,7 @@ def main():
     pdf_folder="./documents",
     vector_db_path="./vector_db",
     model_name="gemma3:4b",
-    embedding_model="nomic-embed-text:latest",
+    embedding_model="bge-m3:latest",
     debug_mode=False,  # Set to True to see detailed extraction info
     ocr_dpi=300,       # Higher DPI for better OCR quality
     ocr_lang='eng'     # OCR language
