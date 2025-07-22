@@ -7,3 +7,4 @@ PyMuPDF
 watchdog
 pytesseract
 pdf2image
+python-dotenv
