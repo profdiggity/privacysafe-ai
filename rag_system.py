@@ -598,7 +598,7 @@ class RobustRAGSystem:
     load_dotenv()
 
     template = os.getenv("QUERY_TEMPLATE")
-    #Mene nayi waali prompt template env mein daal di hai toh agar template chahiye ho toh previous commit se utha lena poorani waali (nayi waali vese bohot GOATED hai). Aur agar nayi waali chahiye ho toh mail kardena. Gatekeeping 😋
+    #I open-sourced the template so that anyone can use it and customize it. I don't even know why I gated it in the first place. I'm sorry.
 
     if not template:
             raise ValueError("QUERY_TEMPLATE environment variable is not set.")
